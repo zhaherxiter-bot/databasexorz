@@ -1,0 +1,79 @@
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: "URL download ZIP project Flutter"
+        required: true
+      tag:
+        description: "Tag build"
+        required: true
+      build_type:
+        description: "debug / release"
+        required: true
+        default: "release"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download ZIP project
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          curl -L -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+            "${{ github.event.inputs.zip_url }}" -o project.zip
+          ls -lh project.zip
+          unzip -t project.zip
+
+      - name: Extract ZIP
+        run: |
+          mkdir -p project_raw
+          unzip -q project.zip -d project_raw
+          if [ -f project_raw/pubspec.yaml ]; then
+            echo "PROJECT_DIR=project_raw" >> $GITHUB_ENV
+          else
+            FOUND=$(find project_raw -name pubspec.yaml | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "PROJECT_DIR=$(dirname $FOUND)" >> $GITHUB_ENV
+            else
+              echo "pubspec.yaml not found"
+              find project_raw -maxdepth 3
+              exit 1
+            fi
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          flutter pub get
+          flutter build apk --${{ github.event.inputs.build_type }}
+
+      - name: Locate APK
+        run: |
+          APK=$(find "$GITHUB_WORKSPACE" -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then echo "APK not found"; exit 1; fi
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-${{ github.event.inputs.build_type }}-${{ github.event.inputs.tag }}
+          path: ${{ env.APK_PATH }}
+          retention-days: 1
+          if-no-files-found: error
